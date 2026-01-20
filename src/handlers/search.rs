@@ -40,3 +40,18 @@ pub async fn search_handler(
         results,
     }))
 }
+
+pub async fn semantic_search_handler(
+    State(pool): State<PgPool>,
+    Path(customer_id): Path<String>,
+    Query(params): Query<SearchQuery>,
+) -> Result<Json<SearchResponse>> {
+    let results =
+        SearchService::semantic_search(&pool, &customer_id, &params.q, params.limit).await?;
+
+    Ok(Json(SearchResponse {
+        query: params.q,
+        count: results.len(),
+        results,
+    }))
+}

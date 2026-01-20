@@ -1,4 +1,4 @@
-# ParadeDB CSV Ingestion POC
+# ParadeDB CSV Ingestion POC with Silver Layer
 
 set dotenv-load
 
@@ -54,15 +54,30 @@ upload customer file:
     @curl -s -X POST {{base_url}}/customers/{{customer}}/upload \
         -F "file=@{{file}}" | jq .
 
-# Process bronze -> gold for a customer
+# Process bronze -> silver for a customer
+process-bronze-silver customer:
+    @echo "Processing bronze -> silver for {{customer}}..."
+    @curl -s -X POST {{base_url}}/customers/{{customer}}/process/bronze-to-silver | jq .
+
+# Process silver -> gold for a customer
+process-silver-gold customer:
+    @echo "Processing silver -> gold for {{customer}}..."
+    @curl -s -X POST {{base_url}}/customers/{{customer}}/process/silver-to-gold | jq .
+
+# Full pipeline: bronze -> silver -> gold for a customer
 process customer:
-    @echo "Processing bronze -> gold for {{customer}}..."
+    @echo "Processing full pipeline for {{customer}}..."
     @curl -s -X POST {{base_url}}/customers/{{customer}}/process | jq .
 
-# Search a customer's gold layer
+# Search a customer's gold layer (BM25 full-text search)
 search customer query:
     @echo "Searching {{customer}} for '{{query}}'..."
     @curl -s "{{base_url}}/customers/{{customer}}/search?q={{query}}" | jq .
+
+# Semantic search a customer's gold layer (vector similarity)
+semantic-search customer query:
+    @echo "Semantic search {{customer}} for '{{query}}'..."
+    @curl -s "{{base_url}}/customers/{{customer}}/search/semantic?q={{query}}" | jq .
 
 # Get analytics for a customer
 analytics customer:
@@ -86,7 +101,7 @@ load-all: upload-customer-a upload-customer-b
     @just process customer_a
     @just process customer_b
 
-# Run the full demo
+# Run the full demo with silver layer
 rundemo: build-containers
     @echo "Starting containers in background..."
     podman-compose up &
@@ -94,7 +109,8 @@ rundemo: build-containers
     @just wait-ready
     @echo ""
     @echo "=========================================="
-    @echo "  ParadeDB CSV Ingestion POC Demo"
+    @echo "  ParadeDB Medallion Architecture Demo"
+    @echo "  Bronze -> Silver -> Gold Pipeline"
     @echo "=========================================="
     @echo ""
 
@@ -108,32 +124,32 @@ rundemo: build-containers
     @just upload-customer-b
     @echo ""
 
-    @echo ">>> Step 3: Processing Customer A (bronze -> gold)"
+    @echo ">>> Step 3: Processing Customer A (bronze -> silver -> gold)"
     @echo "-------------------------------------------"
     @just process customer_a
     @echo ""
 
-    @echo ">>> Step 4: Processing Customer B (bronze -> gold)"
+    @echo ">>> Step 4: Processing Customer B (bronze -> silver -> gold)"
     @echo "-------------------------------------------"
     @just process customer_b
     @echo ""
 
-    @echo ">>> Step 5: Search for 'important' in Customer A"
+    @echo ">>> Step 5: BM25 Search for 'important' in Customer A"
     @echo "-------------------------------------------"
     @just search customer_a important
     @echo ""
 
-    @echo ">>> Step 6: Search for 'important' in Customer B"
+    @echo ">>> Step 6: Semantic Search for 'important' in Customer A"
     @echo "-------------------------------------------"
-    @just search customer_b important
+    @just semantic-search customer_a important
     @echo ""
 
-    @echo ">>> Step 7: Analytics for Customer A"
+    @echo ">>> Step 7: Analytics for Customer A (with sentiment)"
     @echo "-------------------------------------------"
     @just analytics customer_a
     @echo ""
 
-    @echo ">>> Step 8: Analytics for Customer B"
+    @echo ">>> Step 8: Analytics for Customer B (with sentiment)"
     @echo "-------------------------------------------"
     @just analytics customer_b
     @echo ""
@@ -144,9 +160,39 @@ rundemo: build-containers
     @echo ""
     @echo "Try these commands:"
     @echo "  just search customer_a meeting"
-    @echo "  just search customer_b budget"
+    @echo "  just semantic-search customer_a meeting"
     @echo "  just analytics customer_a"
+    @echo "  just process-bronze-silver customer_a  # Step-by-step"
+    @echo "  just process-silver-gold customer_a    # Step-by-step"
     @echo "  just down  # to stop containers"
+
+# Demo: Step-by-step processing
+demo-stepwise: build-containers
+    @echo "Starting containers in background..."
+    podman-compose up &
+    @sleep 2
+    @just wait-ready
+    @echo ""
+    @echo "=========================================="
+    @echo "  Step-by-Step Processing Demo"
+    @echo "=========================================="
+    @echo ""
+
+    @echo ">>> Step 1: Upload CSV"
+    @just upload customer_a sample_data/customer_a/file1.csv
+    @echo ""
+
+    @echo ">>> Step 2: Process Bronze -> Silver (embeddings, sentiment)"
+    @just process-bronze-silver customer_a
+    @echo ""
+
+    @echo ">>> Step 3: Process Silver -> Gold (optimized for queries)"
+    @just process-silver-gold customer_a
+    @echo ""
+
+    @echo ">>> Step 4: Search and Analytics"
+    @just search customer_a important
+    @just analytics customer_a
 
 # Clean up: stop containers and remove volumes
 clean:

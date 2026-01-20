@@ -17,3 +17,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1"
 time = { version = "0.3", features = ["serde"] }
 anyhow = "1"
+async-trait = "0.1"
+pgvector = { version = "0.4", features = ["sqlx"] }

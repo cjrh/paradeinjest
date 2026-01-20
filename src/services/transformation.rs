@@ -1,59 +1,74 @@
+use pgvector::Vector;
 use sqlx::PgPool;
 
 use crate::db::SchemaManager;
-use crate::error::{AppError, Result};
-use crate::models::BronzeRecord;
-
-const TEXT_COLUMN_NAMES: &[&str] = &[
-    "text",
-    "content",
-    "body",
-    "message",
-    "description",
-    "notes",
-];
+use crate::error::Result;
 
 pub struct TransformationService;
 
 impl TransformationService {
-    pub async fn transform_bronze_to_gold(pool: &PgPool, customer_id: &str) -> Result<u64> {
+    pub async fn transform_silver_to_gold(pool: &PgPool, customer_id: &str) -> Result<u64> {
         let schema = SchemaManager::schema_name(customer_id);
 
+        // Fetch unprocessed silver records
         let query = format!(
-            "SELECT id, source_file, raw_data, ingested_at FROM {}.bronze
-             WHERE id NOT IN (SELECT bronze_id FROM {}.gold WHERE bronze_id IS NOT NULL)",
+            "SELECT id, bronze_id, primary_text, label, sentiment, sentiment_score, embedding
+             FROM {}.silver
+             WHERE id NOT IN (SELECT silver_id FROM {}.gold WHERE silver_id IS NOT NULL)",
             schema, schema
         );
 
-        let bronze_records: Vec<BronzeRecord> = sqlx::query_as(&query).fetch_all(pool).await?;
+        #[derive(sqlx::FromRow)]
+        struct SilverRow {
+            id: i32,
+            bronze_id: Option<i32>,
+            primary_text: Option<String>,
+            label: Option<String>,
+            sentiment: Option<String>,
+            sentiment_score: Option<f32>,
+            embedding: Option<Vector>,
+        }
+
+        let silver_records: Vec<SilverRow> = sqlx::query_as(&query).fetch_all(pool).await?;
 
         let mut count = 0u64;
 
-        for bronze in bronze_records {
-            let raw_data = bronze.raw_data.0.as_object();
+        for silver in silver_records {
+            let text = silver.primary_text.unwrap_or_default();
+            let label = silver.label.unwrap_or_else(|| "general".to_string());
+            let sentiment = silver.sentiment.unwrap_or_else(|| "neutral".to_string());
+            let sentiment_score = silver.sentiment_score.unwrap_or(0.0);
 
-            if let Some(obj) = raw_data {
-                let text = Self::extract_text(obj)?;
-                let label = Self::derive_label(&text);
+            let text_length = text.len() as i32;
+            let word_count = text.split_whitespace().count() as i32;
 
-                let insert_query = format!(
-                    "INSERT INTO {}.gold (bronze_id, text, label) VALUES ($1, $2, $3)",
-                    schema
-                );
+            let insert_query = format!(
+                "INSERT INTO {}.gold (
+                    silver_id, bronze_id, text, label, sentiment, sentiment_score,
+                    text_length, word_count, embedding
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                schema
+            );
 
-                sqlx::query(&insert_query)
-                    .bind(bronze.id)
-                    .bind(&text)
-                    .bind(&label)
-                    .execute(pool)
-                    .await?;
+            sqlx::query(&insert_query)
+                .bind(silver.id)
+                .bind(silver.bronze_id)
+                .bind(&text)
+                .bind(&label)
+                .bind(&sentiment)
+                .bind(sentiment_score)
+                .bind(text_length)
+                .bind(word_count)
+                .bind(&silver.embedding)
+                .execute(pool)
+                .await?;
 
-                count += 1;
-            }
+            count += 1;
         }
 
         if count > 0 {
             SchemaManager::create_bm25_index(pool, customer_id).await?;
+            SchemaManager::create_gold_embedding_index(pool, customer_id).await?;
         }
 
         tracing::info!(
@@ -65,31 +80,19 @@ impl TransformationService {
         Ok(count)
     }
 
-    fn extract_text(obj: &serde_json::Map<String, serde_json::Value>) -> Result<String> {
-        for col_name in TEXT_COLUMN_NAMES {
-            if let Some(value) = obj.get(*col_name) {
-                if let Some(text) = value.as_str() {
-                    return Ok(text.to_string());
-                }
-            }
-        }
+    pub async fn transform_full_pipeline(pool: &PgPool, customer_id: &str) -> Result<(u64, u64)> {
+        use crate::services::SilverService;
 
-        for (_key, value) in obj {
-            if let Some(text) = value.as_str() {
-                if text.len() > 10 {
-                    return Ok(text.to_string());
-                }
-            }
-        }
+        let silver_count = SilverService::transform_bronze_to_silver(pool, customer_id).await?;
+        let gold_count = Self::transform_silver_to_gold(pool, customer_id).await?;
 
-        Err(AppError::NoTextColumn)
-    }
+        tracing::info!(
+            "Full pipeline for customer {}: {} bronze→silver, {} silver→gold",
+            customer_id,
+            silver_count,
+            gold_count
+        );
 
-    fn derive_label(text: &str) -> String {
-        if text.to_lowercase().contains("important") {
-            "high_priority".to_string()
-        } else {
-            "normal".to_string()
-        }
+        Ok((silver_count, gold_count))
     }
 }

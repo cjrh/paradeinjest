@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  paradedb:
+    image: docker.io/paradedb/paradedb:latest
+    container_name: paradeinjest-db
+    environment:
+      POSTGRES_USER: parade
+      POSTGRES_PASSWORD: parade
+      POSTGRES_DB: paradeinjest
+    ports:
+      - "5432:5432"
+    volumes:
+      - paradedb_data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parade -d paradeinjest"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: paradeinjest-app
+    environment:
+      DATABASE_URL: postgres://parade:parade@paradedb:5432/paradeinjest
+      RUST_LOG: info
+    ports:
+      - "3000:3000"
+    depends_on:
+      paradedb:
+        condition: service_healthy
+
+volumes:
+  paradedb_data:

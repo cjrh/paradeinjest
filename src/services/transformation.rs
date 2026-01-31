@@ -1,13 +1,16 @@
+use diesel::sql_query;
+use diesel::sql_types::{Float4, Integer, Nullable, Text};
+use diesel::QueryableByName;
+use diesel_async::RunQueryDsl;
 use pgvector::Vector;
-use sqlx::PgPool;
 
-use crate::db::SchemaManager;
+use crate::db::{DbPool, SchemaManager};
 use crate::error::Result;
 
 pub struct TransformationService;
 
 impl TransformationService {
-    pub async fn transform_silver_to_gold(pool: &PgPool, customer_id: &str) -> Result<u64> {
+    pub async fn transform_silver_to_gold(pool: &DbPool, customer_id: &str) -> Result<u64> {
         let schema = SchemaManager::schema_name(customer_id);
 
         // Fetch unprocessed silver records
@@ -18,18 +21,26 @@ impl TransformationService {
             schema, schema
         );
 
-        #[derive(sqlx::FromRow)]
+        #[derive(QueryableByName)]
         struct SilverRow {
+            #[diesel(sql_type = Integer)]
             id: i32,
+            #[diesel(sql_type = Nullable<Integer>)]
             bronze_id: Option<i32>,
+            #[diesel(sql_type = Nullable<Text>)]
             primary_text: Option<String>,
+            #[diesel(sql_type = Nullable<Text>)]
             label: Option<String>,
+            #[diesel(sql_type = Nullable<Text>)]
             sentiment: Option<String>,
+            #[diesel(sql_type = Nullable<Float4>)]
             sentiment_score: Option<f32>,
+            #[diesel(sql_type = Nullable<pgvector::sql_types::Vector>)]
             embedding: Option<Vector>,
         }
 
-        let silver_records: Vec<SilverRow> = sqlx::query_as(&query).fetch_all(pool).await?;
+        let mut conn = pool.get().await?;
+        let silver_records: Vec<SilverRow> = sql_query(query).load(&mut conn).await?;
 
         let mut count = 0u64;
 
@@ -50,17 +61,17 @@ impl TransformationService {
                 schema
             );
 
-            sqlx::query(&insert_query)
-                .bind(silver.id)
-                .bind(silver.bronze_id)
-                .bind(&text)
-                .bind(&label)
-                .bind(&sentiment)
-                .bind(sentiment_score)
-                .bind(text_length)
-                .bind(word_count)
-                .bind(&silver.embedding)
-                .execute(pool)
+            sql_query(insert_query)
+                .bind::<Integer, _>(silver.id)
+                .bind::<Nullable<Integer>, _>(silver.bronze_id)
+                .bind::<Text, _>(&text)
+                .bind::<Text, _>(&label)
+                .bind::<Text, _>(&sentiment)
+                .bind::<Float4, _>(sentiment_score)
+                .bind::<Integer, _>(text_length)
+                .bind::<Integer, _>(word_count)
+                .bind::<Nullable<pgvector::sql_types::Vector>, _>(&silver.embedding)
+                .execute(&mut conn)
                 .await?;
 
             count += 1;
@@ -80,7 +91,7 @@ impl TransformationService {
         Ok(count)
     }
 
-    pub async fn transform_full_pipeline(pool: &PgPool, customer_id: &str) -> Result<(u64, u64)> {
+    pub async fn transform_full_pipeline(pool: &DbPool, customer_id: &str) -> Result<(u64, u64)> {
         use crate::services::SilverService;
 
         let silver_count = SilverService::transform_bronze_to_silver(pool, customer_id).await?;

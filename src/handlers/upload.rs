@@ -3,8 +3,8 @@ use axum::{
     Json,
 };
 use serde::Serialize;
-use sqlx::PgPool;
 
+use crate::db::DbPool;
 use crate::error::{AppError, Result};
 use crate::services::IngestionService;
 
@@ -16,7 +16,7 @@ pub struct UploadResponse {
 }
 
 pub async fn upload_handler(
-    State(pool): State<PgPool>,
+    State(pool): State<DbPool>,
     Path(customer_id): Path<String>,
     mut multipart: Multipart,
 ) -> Result<Json<UploadResponse>> {

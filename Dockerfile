@@ -2,8 +2,11 @@ FROM rust:latest AS builder
 
 WORKDIR /app
 
-# Copy manifests
-COPY Cargo.toml Cargo.lock ./
+# Copy manifests and config
+COPY Cargo.toml Cargo.lock diesel.toml ./
+
+# Copy migrations for embed_migrations! macro
+COPY migrations ./migrations
 
 # Create a dummy main.rs to cache dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs
@@ -23,6 +26,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

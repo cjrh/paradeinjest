@@ -1,7 +1,9 @@
+use diesel::sql_query;
+use diesel::sql_types::{Integer, Text};
+use diesel_async::RunQueryDsl;
 use pgvector::Vector;
-use sqlx::PgPool;
 
-use crate::db::SchemaManager;
+use crate::db::{DbPool, SchemaManager};
 use crate::error::Result;
 use crate::models::SearchResult;
 use crate::services::embedding::{EmbeddingProvider, MockEmbeddingProvider};
@@ -10,7 +12,7 @@ pub struct SearchService;
 
 impl SearchService {
     pub async fn search(
-        pool: &PgPool,
+        pool: &DbPool,
         customer_id: &str,
         query: &str,
         limit: i32,
@@ -26,10 +28,11 @@ impl SearchService {
             schema
         );
 
-        let results: Vec<SearchResult> = sqlx::query_as(&sql)
-            .bind(query)
-            .bind(limit)
-            .fetch_all(pool)
+        let mut conn = pool.get().await?;
+        let results: Vec<SearchResult> = sql_query(sql)
+            .bind::<Text, _>(query)
+            .bind::<Integer, _>(limit)
+            .load(&mut conn)
             .await?;
 
         tracing::info!(
@@ -43,7 +46,7 @@ impl SearchService {
     }
 
     pub async fn semantic_search(
-        pool: &PgPool,
+        pool: &DbPool,
         customer_id: &str,
         query: &str,
         limit: i32,
@@ -64,10 +67,11 @@ impl SearchService {
             schema
         );
 
-        let results: Vec<SearchResult> = sqlx::query_as(&sql)
-            .bind(&query_vector)
-            .bind(limit)
-            .fetch_all(pool)
+        let mut conn = pool.get().await?;
+        let results: Vec<SearchResult> = sql_query(sql)
+            .bind::<pgvector::sql_types::Vector, _>(&query_vector)
+            .bind::<Integer, _>(limit)
+            .load(&mut conn)
             .await?;
 
         tracing::info!(

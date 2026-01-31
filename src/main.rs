@@ -10,7 +10,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::Config;
-use crate::db::create_pool;
+use crate::db::{create_pool, run_migrations};
 use crate::routes::create_router;
 
 #[tokio::main]
@@ -25,8 +25,11 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env();
 
+    tracing::info!("Running database migrations...");
+    run_migrations(&config.database_url).map_err(|e| anyhow::anyhow!("{}", e))?;
+
     tracing::info!("Connecting to database...");
-    let pool = create_pool(&config.database_url).await?;
+    let pool = create_pool(&config.database_url).await.map_err(|e| anyhow::anyhow!("{}", e))?;
     tracing::info!("Database connected");
 
     let app = create_router(pool).layer(TraceLayer::new_for_http());

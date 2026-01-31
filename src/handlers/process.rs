@@ -3,8 +3,8 @@ use axum::{
     Json,
 };
 use serde::Serialize;
-use sqlx::PgPool;
 
+use crate::db::DbPool;
 use crate::error::Result;
 use crate::services::{SilverService, TransformationService};
 
@@ -22,7 +22,7 @@ pub struct FullPipelineResponse {
 }
 
 pub async fn bronze_to_silver_handler(
-    State(pool): State<PgPool>,
+    State(pool): State<DbPool>,
     Path(customer_id): Path<String>,
 ) -> Result<Json<ProcessResponse>> {
     let count = SilverService::transform_bronze_to_silver(&pool, &customer_id).await?;
@@ -34,7 +34,7 @@ pub async fn bronze_to_silver_handler(
 }
 
 pub async fn silver_to_gold_handler(
-    State(pool): State<PgPool>,
+    State(pool): State<DbPool>,
     Path(customer_id): Path<String>,
 ) -> Result<Json<ProcessResponse>> {
     let count = TransformationService::transform_silver_to_gold(&pool, &customer_id).await?;
@@ -46,7 +46,7 @@ pub async fn silver_to_gold_handler(
 }
 
 pub async fn process_handler(
-    State(pool): State<PgPool>,
+    State(pool): State<DbPool>,
     Path(customer_id): Path<String>,
 ) -> Result<Json<FullPipelineResponse>> {
     let (silver_count, gold_count) =

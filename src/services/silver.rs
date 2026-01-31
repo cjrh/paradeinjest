@@ -1,7 +1,9 @@
+use diesel::sql_query;
+use diesel::sql_types::{Float4, Integer, Jsonb, Text};
+use diesel_async::RunQueryDsl;
 use pgvector::Vector;
-use sqlx::PgPool;
 
-use crate::db::SchemaManager;
+use crate::db::{DbPool, SchemaManager};
 use crate::error::{AppError, Result};
 use crate::models::BronzeRecord;
 use crate::services::embedding::{EmbeddingProvider, MockEmbeddingProvider};
@@ -19,7 +21,7 @@ const TEXT_COLUMN_NAMES: &[&str] = &[
 pub struct SilverService;
 
 impl SilverService {
-    pub async fn transform_bronze_to_silver(pool: &PgPool, customer_id: &str) -> Result<u64> {
+    pub async fn transform_bronze_to_silver(pool: &DbPool, customer_id: &str) -> Result<u64> {
         let schema = SchemaManager::schema_name(customer_id);
         let embedding_provider = MockEmbeddingProvider::new();
 
@@ -29,12 +31,13 @@ impl SilverService {
             schema, schema
         );
 
-        let bronze_records: Vec<BronzeRecord> = sqlx::query_as(&query).fetch_all(pool).await?;
+        let mut conn = pool.get().await?;
+        let bronze_records: Vec<BronzeRecord> = sql_query(query).load(&mut conn).await?;
 
         let mut count = 0u64;
 
         for bronze in bronze_records {
-            let raw_data = bronze.raw_data.0.as_object();
+            let raw_data = bronze.raw_data.as_object();
 
             if let Some(obj) = raw_data {
                 let text = Self::extract_text(obj)?;
@@ -59,17 +62,17 @@ impl SilverService {
                     schema
                 );
 
-                sqlx::query(&insert_query)
-                    .bind(bronze.id)
-                    .bind(&bronze.raw_data.0)
-                    .bind(&text)
-                    .bind(&label)
-                    .bind(quality_score)
-                    .bind(&embedding)
-                    .bind(&sentiment_result.label)
-                    .bind(sentiment_result.score)
-                    .bind(serde_json::to_value(&field_mapping).unwrap_or_default())
-                    .execute(pool)
+                sql_query(insert_query)
+                    .bind::<Integer, _>(bronze.id)
+                    .bind::<Jsonb, _>(&bronze.raw_data)
+                    .bind::<Text, _>(&text)
+                    .bind::<Text, _>(&label)
+                    .bind::<Float4, _>(quality_score)
+                    .bind::<pgvector::sql_types::Vector, _>(&embedding)
+                    .bind::<Text, _>(&sentiment_result.label)
+                    .bind::<Float4, _>(sentiment_result.score)
+                    .bind::<Jsonb, _>(serde_json::to_value(&field_mapping).unwrap_or_default())
+                    .execute(&mut conn)
                     .await?;
 
                 count += 1;

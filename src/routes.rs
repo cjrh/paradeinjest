@@ -2,14 +2,14 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use sqlx::PgPool;
 
+use crate::db::DbPool;
 use crate::handlers::{
     analytics_handler, bronze_to_silver_handler, process_handler, search_handler,
     semantic_search_handler, silver_to_gold_handler, upload_handler,
 };
 
-pub fn create_router(pool: PgPool) -> Router {
+pub fn create_router(pool: DbPool) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/customers/:id/upload", post(upload_handler))

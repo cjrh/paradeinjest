@@ -9,7 +9,10 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum AppError {
     #[error("Database error: {0}")]
-    Database(#[from] sqlx::Error),
+    Database(#[from] diesel::result::Error),
+
+    #[error("Connection pool error: {0}")]
+    Pool(String),
 
     #[error("CSV parsing error: {0}")]
     CsvParse(#[from] csv::Error),
@@ -30,11 +33,21 @@ pub enum AppError {
     Internal(String),
 }
 
+impl From<diesel_async::pooled_connection::bb8::RunError> for AppError {
+    fn from(err: diesel_async::pooled_connection::bb8::RunError) -> Self {
+        AppError::Pool(err.to_string())
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             AppError::Database(e) => {
                 tracing::error!("Database error: {:?}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
+            }
+            AppError::Pool(e) => {
+                tracing::error!("Pool error: {:?}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
             }
             AppError::CsvParse(e) => {

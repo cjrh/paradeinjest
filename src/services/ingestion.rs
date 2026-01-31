@@ -1,15 +1,17 @@
 use csv::ReaderBuilder;
+use diesel::sql_query;
+use diesel::sql_types::{Jsonb, Text};
+use diesel_async::RunQueryDsl;
 use serde_json::{Map, Value};
-use sqlx::PgPool;
 
-use crate::db::SchemaManager;
+use crate::db::{DbPool, SchemaManager};
 use crate::error::Result;
 
 pub struct IngestionService;
 
 impl IngestionService {
     pub async fn ingest_csv(
-        pool: &PgPool,
+        pool: &DbPool,
         customer_id: &str,
         filename: &str,
         csv_data: &[u8],
@@ -28,6 +30,7 @@ impl IngestionService {
             .collect();
 
         let mut count = 0u64;
+        let mut conn = pool.get().await?;
 
         for result in reader.records() {
             let record = result?;
@@ -46,10 +49,10 @@ impl IngestionService {
                 schema
             );
 
-            sqlx::query(&query)
-                .bind(filename)
-                .bind(&raw_data)
-                .execute(pool)
+            sql_query(query)
+                .bind::<Text, _>(filename)
+                .bind::<Jsonb, _>(&raw_data)
+                .execute(&mut conn)
                 .await?;
 
             count += 1;

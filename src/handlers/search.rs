@@ -3,8 +3,8 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
+use crate::db::DbPool;
 use crate::error::Result;
 use crate::models::SearchResult;
 use crate::services::SearchService;
@@ -28,7 +28,7 @@ pub struct SearchResponse {
 }
 
 pub async fn search_handler(
-    State(pool): State<PgPool>,
+    State(pool): State<DbPool>,
     Path(customer_id): Path<String>,
     Query(params): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>> {
@@ -42,7 +42,7 @@ pub async fn search_handler(
 }
 
 pub async fn semantic_search_handler(
-    State(pool): State<PgPool>,
+    State(pool): State<DbPool>,
     Path(customer_id): Path<String>,
     Query(params): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>> {

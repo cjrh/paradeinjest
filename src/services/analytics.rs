@@ -1,7 +1,10 @@
+use diesel::sql_query;
+use diesel::sql_types::{BigInt, Double, Nullable, Text};
+use diesel::QueryableByName;
+use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
-use crate::db::SchemaManager;
+use crate::db::{DbPool, SchemaManager};
 use crate::error::Result;
 use crate::models::gold::LabelCount;
 
@@ -25,7 +28,7 @@ pub struct SentimentBreakdown {
 pub struct AnalyticsService;
 
 impl AnalyticsService {
-    pub async fn get_label_counts(pool: &PgPool, customer_id: &str) -> Result<Vec<LabelCount>> {
+    pub async fn get_label_counts(pool: &DbPool, customer_id: &str) -> Result<Vec<LabelCount>> {
         let schema = SchemaManager::schema_name(customer_id);
 
         let query = format!(
@@ -36,12 +39,13 @@ impl AnalyticsService {
             schema
         );
 
-        let results: Vec<LabelCount> = sqlx::query_as(&query).fetch_all(pool).await?;
+        let mut conn = pool.get().await?;
+        let results: Vec<LabelCount> = sql_query(query).load(&mut conn).await?;
 
         Ok(results)
     }
 
-    pub async fn get_full_analytics(pool: &PgPool, customer_id: &str) -> Result<AnalyticsResult> {
+    pub async fn get_full_analytics(pool: &DbPool, customer_id: &str) -> Result<AnalyticsResult> {
         let schema = SchemaManager::schema_name(customer_id);
 
         // Get label counts
@@ -69,19 +73,24 @@ impl AnalyticsService {
         })
     }
 
-    async fn get_sentiment_breakdown(pool: &PgPool, schema: &str) -> Result<SentimentBreakdown> {
+    async fn get_sentiment_breakdown(pool: &DbPool, schema: &str) -> Result<SentimentBreakdown> {
         // Try using pdb.agg() for sentiment aggregation
         let agg_query = format!(
-            r#"SELECT pdb.agg('{{"aggs": {{"sentiment_counts": {{"terms": {{"field": "sentiment"}}}}}}}}') FROM {}.gold"#,
+            r#"SELECT pdb.agg('{{"aggs": {{"sentiment_counts": {{"terms": {{"field": "sentiment"}}}}}}}}') as result FROM {}.gold"#,
             schema
         );
 
+        #[derive(QueryableByName)]
+        struct AggResult {
+            #[diesel(sql_type = Nullable<diesel::sql_types::Jsonb>)]
+            result: Option<serde_json::Value>,
+        }
+
+        let mut conn = pool.get().await?;
+
         // Try the aggregation query, fall back to simple SQL if it fails
-        match sqlx::query_scalar::<_, serde_json::Value>(&agg_query)
-            .fetch_optional(pool)
-            .await
-        {
-            Ok(Some(result)) => {
+        match sql_query(agg_query).get_result::<AggResult>(&mut conn).await {
+            Ok(AggResult { result: Some(result) }) => {
                 // Parse the pdb.agg() result
                 if let Some(buckets) = result
                     .get("sentiment_counts")
@@ -112,7 +121,7 @@ impl AnalyticsService {
     }
 
     async fn get_sentiment_breakdown_sql(
-        pool: &PgPool,
+        pool: &DbPool,
         schema: &str,
     ) -> Result<SentimentBreakdown> {
         let query = format!(
@@ -123,14 +132,23 @@ impl AnalyticsService {
             schema
         );
 
-        let rows: Vec<(String, i64)> = sqlx::query_as(&query).fetch_all(pool).await?;
+        #[derive(QueryableByName)]
+        struct SentimentRow {
+            #[diesel(sql_type = Text)]
+            sentiment: String,
+            #[diesel(sql_type = BigInt)]
+            count: i64,
+        }
+
+        let mut conn = pool.get().await?;
+        let rows: Vec<SentimentRow> = sql_query(query).load(&mut conn).await?;
 
         let mut breakdown = SentimentBreakdown::default();
-        for (sentiment, count) in rows {
-            match sentiment.as_str() {
-                "positive" => breakdown.positive = count,
-                "neutral" => breakdown.neutral = count,
-                "negative" => breakdown.negative = count,
+        for row in rows {
+            match row.sentiment.as_str() {
+                "positive" => breakdown.positive = row.count,
+                "neutral" => breakdown.neutral = row.count,
+                "negative" => breakdown.negative = row.count,
                 _ => {}
             }
         }
@@ -138,18 +156,23 @@ impl AnalyticsService {
         Ok(breakdown)
     }
 
-    async fn get_avg_text_length(pool: &PgPool, schema: &str) -> Result<f64> {
+    async fn get_avg_text_length(pool: &DbPool, schema: &str) -> Result<f64> {
         // Try using pdb.agg() for average calculation
         let agg_query = format!(
-            r#"SELECT pdb.agg('{{"aggs": {{"avg_length": {{"avg": {{"field": "text_length"}}}}}}}}') FROM {}.gold"#,
+            r#"SELECT pdb.agg('{{"aggs": {{"avg_length": {{"avg": {{"field": "text_length"}}}}}}}}') as result FROM {}.gold"#,
             schema
         );
 
-        match sqlx::query_scalar::<_, serde_json::Value>(&agg_query)
-            .fetch_optional(pool)
-            .await
-        {
-            Ok(Some(result)) => {
+        #[derive(QueryableByName)]
+        struct AggResult {
+            #[diesel(sql_type = Nullable<diesel::sql_types::Jsonb>)]
+            result: Option<serde_json::Value>,
+        }
+
+        let mut conn = pool.get().await?;
+
+        match sql_query(agg_query).get_result::<AggResult>(&mut conn).await {
+            Ok(AggResult { result: Some(result) }) => {
                 if let Some(avg) = result
                     .get("avg_length")
                     .and_then(|v| v.get("value"))
@@ -163,32 +186,41 @@ impl AnalyticsService {
         }
     }
 
-    async fn get_avg_text_length_sql(pool: &PgPool, schema: &str) -> Result<f64> {
+    async fn get_avg_text_length_sql(pool: &DbPool, schema: &str) -> Result<f64> {
         let query = format!(
-            "SELECT COALESCE(AVG(text_length), 0) FROM {}.gold",
+            "SELECT COALESCE(AVG(text_length), 0) as avg FROM {}.gold",
             schema
         );
 
-        let avg: f64 = sqlx::query_scalar(&query)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0.0);
+        #[derive(QueryableByName)]
+        struct AvgResult {
+            #[diesel(sql_type = Double)]
+            avg: f64,
+        }
 
-        Ok(avg)
+        let mut conn = pool.get().await?;
+        let result: AvgResult = sql_query(query).get_result(&mut conn).await.unwrap_or(AvgResult { avg: 0.0 });
+
+        Ok(result.avg)
     }
 
-    async fn get_avg_word_count(pool: &PgPool, schema: &str) -> Result<f64> {
+    async fn get_avg_word_count(pool: &DbPool, schema: &str) -> Result<f64> {
         // Try using pdb.agg() for average calculation
         let agg_query = format!(
-            r#"SELECT pdb.agg('{{"aggs": {{"avg_words": {{"avg": {{"field": "word_count"}}}}}}}}') FROM {}.gold"#,
+            r#"SELECT pdb.agg('{{"aggs": {{"avg_words": {{"avg": {{"field": "word_count"}}}}}}}}') as result FROM {}.gold"#,
             schema
         );
 
-        match sqlx::query_scalar::<_, serde_json::Value>(&agg_query)
-            .fetch_optional(pool)
-            .await
-        {
-            Ok(Some(result)) => {
+        #[derive(QueryableByName)]
+        struct AggResult {
+            #[diesel(sql_type = Nullable<diesel::sql_types::Jsonb>)]
+            result: Option<serde_json::Value>,
+        }
+
+        let mut conn = pool.get().await?;
+
+        match sql_query(agg_query).get_result::<AggResult>(&mut conn).await {
+            Ok(AggResult { result: Some(result) }) => {
                 if let Some(avg) = result
                     .get("avg_words")
                     .and_then(|v| v.get("value"))
@@ -202,28 +234,36 @@ impl AnalyticsService {
         }
     }
 
-    async fn get_avg_word_count_sql(pool: &PgPool, schema: &str) -> Result<f64> {
+    async fn get_avg_word_count_sql(pool: &DbPool, schema: &str) -> Result<f64> {
         let query = format!(
-            "SELECT COALESCE(AVG(word_count), 0) FROM {}.gold",
+            "SELECT COALESCE(AVG(word_count), 0) as avg FROM {}.gold",
             schema
         );
 
-        let avg: f64 = sqlx::query_scalar(&query)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0.0);
+        #[derive(QueryableByName)]
+        struct AvgResult {
+            #[diesel(sql_type = Double)]
+            avg: f64,
+        }
 
-        Ok(avg)
+        let mut conn = pool.get().await?;
+        let result: AvgResult = sql_query(query).get_result(&mut conn).await.unwrap_or(AvgResult { avg: 0.0 });
+
+        Ok(result.avg)
     }
 
-    async fn get_total_records(pool: &PgPool, schema: &str) -> Result<i64> {
-        let query = format!("SELECT COUNT(*) FROM {}.gold", schema);
+    async fn get_total_records(pool: &DbPool, schema: &str) -> Result<i64> {
+        let query = format!("SELECT COUNT(*) as count FROM {}.gold", schema);
 
-        let count: i64 = sqlx::query_scalar(&query)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+        #[derive(QueryableByName)]
+        struct CountResult {
+            #[diesel(sql_type = BigInt)]
+            count: i64,
+        }
 
-        Ok(count)
+        let mut conn = pool.get().await?;
+        let result: CountResult = sql_query(query).get_result(&mut conn).await.unwrap_or(CountResult { count: 0 });
+
+        Ok(result.count)
     }
 }

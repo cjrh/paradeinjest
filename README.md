@@ -1,3 +1,8 @@
+> [!WARNING]
+> This is a research-level hobby project in alpha. It is not suitable for production use or any serious application.
+>
+> You probably don't want to use this.
+
 # ParadeInJest
 
 A Rust-based multi-tenant data analytics application demonstrating the **Medallion Architecture** (Bronze → Silver → Gold) using [ParadeDB](https://www.paradedb.com/) — PostgreSQL with BM25 full-text search and pgvector similarity search.
@@ -13,7 +18,7 @@ This project explores how to build a modern analytics pipeline that combines:
 
 ## Architecture
 
-This image links to the repo by Piethein Strengholt on Building Medallion Architectures: 
+This image links to the repo by [Piethein Strengholt on Building Medallion Architectures](https://github.com/pietheinstrengholt/building-medallion-architectures-book): 
 
 ![Medallion Architecture](https://raw.githubusercontent.com/pietheinstrengholt/building-medallion-architectures-book/main/assets/medallion_architecture.png)
 
